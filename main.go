@@ -6,6 +6,7 @@ import (
 	"io/ioutil"
 	"net/http"
 
+	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/pion/webrtc/v3"
 	"github.com/thanhpk/randstr"
@@ -53,9 +54,9 @@ func SDPHandler(c *gin.Context) {
 		c.Status(http.StatusInternalServerError)
 		return
 	}
-	peerConnection.CreateDataChannel("application", &webrtc.DataChannelInit{})
+	// peerConnection.CreateDataChannel("application", &webrtc.DataChannelInit{})
 	if _, err := peerConnection.AddTransceiverFromKind(webrtc.RTPCodecTypeAudio, webrtc.RtpTransceiverInit{
-		Direction: webrtc.RTPTransceiverDirectionRecvonly,
+		Direction: webrtc.RTPTransceiverDirectionSendrecv,
 	}); err != nil {
 		fmt.Println("error adding transceiver", err)
 		c.Status(http.StatusInternalServerError)
@@ -76,7 +77,7 @@ func SDPHandler(c *gin.Context) {
 		c.Status(http.StatusInternalServerError)
 		return
 	}
-
+	gatherComplete := webrtc.GatheringCompletePromise(peerConnection)
 	if err := peerConnection.SetLocalDescription(answer); err != nil {
 		fmt.Println("error setting local description", err)
 		c.Status(http.StatusInternalServerError)
@@ -92,6 +93,8 @@ func SDPHandler(c *gin.Context) {
 
 	channel.Users[reqUserID] = peerConnection
 
+	<-gatherComplete
+
 	c.JSON(http.StatusOK, peerConnection.LocalDescription())
 	return
 }
@@ -100,6 +103,7 @@ func main() {
 	engine.RegisterDefaultCodecs()
 	mediaAPI = webrtc.NewAPI(webrtc.WithMediaEngine(engine))
 	r := gin.Default()
+	r.Use(cors.Default())
 	r.POST("/sdp", SDPHandler)
 
 	r.Run(":4000")

@@ -17,14 +17,24 @@ func OnTrackStart(peerConnection *webrtc.PeerConnection, userID string) func(rem
 		}
 		channel.Tracks[userID] = localTrack
 		for userID := range channel.Tracks {
-			if _, err := channel.Users[userID].AddTrack(localTrack); err != nil {
+			rtpSender, err := channel.Users[userID].AddTrack(localTrack)
+			if err != nil {
 				fmt.Println(err)
 			}
+			go func() {
+				rtcpBuf := make([]byte, 1500)
+				for {
+					if _, _, rtcpErr := rtpSender.Read(rtcpBuf); rtcpErr != nil {
+						return
+					}
+				}
+			}()
 			fmt.Println("add track! (after track start)")
 		}
 		rtpBuf := make([]byte, 1460)
 		for {
 			i, _, readErr := remoteTrack.Read(rtpBuf)
+			println(i)
 			if readErr != nil {
 				fmt.Println(readErr)
 				return
