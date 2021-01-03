@@ -61,8 +61,8 @@ func SDPHandler(c *gin.Context) {
 		c.Status(http.StatusInternalServerError)
 		return
 	}
-	peerConnection.OnTrack(OnTrackStart(peerConnection))
-	peerConnection.OnICEConnectionStateChange(OnICEConnectionStateChange(peerConnection))
+	peerConnection.OnTrack(OnTrackStart(peerConnection, reqUserID))
+	peerConnection.OnICEConnectionStateChange(OnICEConnectionStateChange(peerConnection, reqUserID))
 
 	if err := peerConnection.SetRemoteDescription(offer); err != nil {
 		fmt.Println("error setting remote description", err)
