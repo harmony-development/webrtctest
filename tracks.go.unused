@@ -10,7 +10,7 @@ import (
 // OnTrackStart handles when a track is being received from a peer
 func OnTrackStart(peerConnection *webrtc.PeerConnection, userID string) func(remoteTrack *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) {
 	return func(remoteTrack *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) {
-		localTrack, err := webrtc.NewTrackLocalStaticRTP(webrtc.RTPCodecCapability{MimeType: "audio/opus"}, "voice", remoteTrack.ID())
+		localTrack, err := webrtc.NewTrackLocalStaticRTP(remoteTrack.Codec().RTPCodecCapability, "voice", "pion")
 		if err != nil {
 			fmt.Println(err)
 			return

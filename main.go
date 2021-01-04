@@ -2,28 +2,33 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"net/http"
+	"sync"
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/pion/webrtc/v3"
-	"github.com/thanhpk/randstr"
 )
 
-type VoiceChannel struct {
-	Tracks map[string]webrtc.TrackLocal
-	Users  map[string]*webrtc.PeerConnection
-}
+// type VoiceChannel struct {
+// 	*sync.RWMutex
+// 	Tracks map[string]webrtc.TrackLocal
+// 	Users  map[string]*webrtc.PeerConnection
+// }
 
-var channel = VoiceChannel{
-	Tracks: make(map[string]webrtc.TrackLocal),
-	Users:  make(map[string]*webrtc.PeerConnection),
-}
+// var channel = VoiceChannel{
+// 	Tracks:  make(map[string]webrtc.TrackLocal),
+// 	Users:   make(map[string]*webrtc.PeerConnection),
+// 	RWMutex: &sync.RWMutex{},
+// }
 
-var engine = &webrtc.MediaEngine{}
-var mediaAPI *webrtc.API
+var outTrack webrtc.TrackLocal
+var trackMut = sync.RWMutex{}
+
 var peerConnectionConfig = webrtc.Configuration{
 	ICEServers: []webrtc.ICEServer{
 		{
@@ -33,7 +38,9 @@ var peerConnectionConfig = webrtc.Configuration{
 }
 
 func SDPHandler(c *gin.Context) {
-	reqUserID := randstr.Hex(16)
+	// reqUserID := randstr.Hex(16)
+	trackMut.Lock()
+	defer trackMut.Unlock()
 
 	body, err := ioutil.ReadAll(c.Request.Body)
 	if err != nil {
@@ -48,50 +55,69 @@ func SDPHandler(c *gin.Context) {
 		return
 	}
 
-	peerConnection, err := mediaAPI.NewPeerConnection(peerConnectionConfig)
+	peerConnection, err := webrtc.NewPeerConnection(peerConnectionConfig)
 	if err != nil {
-		fmt.Println("error making peer connection", err)
-		c.Status(http.StatusInternalServerError)
-		return
+		panic(err)
 	}
-	// peerConnection.CreateDataChannel("application", &webrtc.DataChannelInit{})
-	if _, err := peerConnection.AddTransceiverFromKind(webrtc.RTPCodecTypeAudio, webrtc.RtpTransceiverInit{
-		Direction: webrtc.RTPTransceiverDirectionSendrecv,
-	}); err != nil {
-		fmt.Println("error adding transceiver", err)
-		c.Status(http.StatusInternalServerError)
-		return
-	}
-	peerConnection.OnTrack(OnTrackStart(peerConnection, reqUserID))
-	peerConnection.OnICEConnectionStateChange(OnICEConnectionStateChange(peerConnection, reqUserID))
 
-	if err := peerConnection.SetRemoteDescription(offer); err != nil {
-		fmt.Println("error setting remote description", err)
-		c.Status(http.StatusInternalServerError)
-		return
+	if outTrack == nil {
+		// Allow us to receive 1 audio track
+		_, err = peerConnection.AddTransceiverFromKind(webrtc.RTPCodecTypeAudio)
+		if err != nil {
+			panic(err)
+		}
+
+		peerConnection.OnTrack(func(remoteTrack *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) {
+			localTrack, newTrackErr := webrtc.NewTrackLocalStaticRTP(remoteTrack.Codec().RTPCodecCapability, "audio", "pion")
+			if newTrackErr != nil {
+				panic(newTrackErr)
+			}
+			outTrack = localTrack
+			rtpBuf := make([]byte, 1400)
+			for {
+				i, _, readErr := remoteTrack.Read(rtpBuf)
+				if readErr != nil {
+					panic(readErr)
+				}
+
+				// ErrClosedPipe means we don't have any subscribers, this is ok if no peers have connected yet
+				if _, err = localTrack.Write(rtpBuf[:i]); err != nil && !errors.Is(err, io.ErrClosedPipe) {
+					panic(err)
+				}
+			}
+		})
+	} else {
+		rtpSender, err := peerConnection.AddTrack(outTrack)
+		if err != nil {
+			panic(err)
+		}
+
+		go func() {
+			rtcpBuf := make([]byte, 1500)
+			for {
+				if _, _, rtcpErr := rtpSender.Read(rtcpBuf); rtcpErr != nil {
+					return
+				}
+			}
+		}()
+	}
+
+	err = peerConnection.SetRemoteDescription(offer)
+	if err != nil {
+		panic(err)
 	}
 
 	answer, err := peerConnection.CreateAnswer(nil)
 	if err != nil {
-		fmt.Println("error making answer", err)
-		c.Status(http.StatusInternalServerError)
-		return
+		panic(err)
 	}
+
 	gatherComplete := webrtc.GatheringCompletePromise(peerConnection)
-	if err := peerConnection.SetLocalDescription(answer); err != nil {
-		fmt.Println("error setting local description", err)
-		c.Status(http.StatusInternalServerError)
-		return
-	}
 
-	for userID := range channel.Tracks {
-		if _, err := peerConnection.AddTrack(channel.Tracks[userID]); err != nil {
-			fmt.Println(err)
-		}
-		fmt.Println("add track!")
+	err = peerConnection.SetLocalDescription(answer)
+	if err != nil {
+		panic(err)
 	}
-
-	channel.Users[reqUserID] = peerConnection
 
 	<-gatherComplete
 
@@ -100,8 +126,6 @@ func SDPHandler(c *gin.Context) {
 }
 
 func main() {
-	engine.RegisterDefaultCodecs()
-	mediaAPI = webrtc.NewAPI(webrtc.WithMediaEngine(engine))
 	r := gin.Default()
 	r.Use(cors.Default())
 	r.POST("/sdp", SDPHandler)
