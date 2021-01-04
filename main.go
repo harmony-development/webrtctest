@@ -12,6 +12,7 @@ import (
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/pion/webrtc/v3"
+	"github.com/thanhpk/randstr"
 )
 
 // type VoiceChannel struct {
@@ -27,6 +28,7 @@ import (
 // }
 
 var outTrack webrtc.TrackLocal
+var clients = make(map[string]*webrtc.PeerConnection)
 var trackMut = sync.RWMutex{}
 
 var peerConnectionConfig = webrtc.Configuration{
@@ -38,7 +40,7 @@ var peerConnectionConfig = webrtc.Configuration{
 }
 
 func SDPHandler(c *gin.Context) {
-	// reqUserID := randstr.Hex(16)
+	reqUserID := randstr.Hex(16)
 	trackMut.Lock()
 	defer trackMut.Unlock()
 
@@ -59,7 +61,7 @@ func SDPHandler(c *gin.Context) {
 	if err != nil {
 		panic(err)
 	}
-
+	clients[reqUserID] = peerConnection
 	if outTrack == nil {
 		// Allow us to receive 1 audio track
 		_, err = peerConnection.AddTransceiverFromKind(webrtc.RTPCodecTypeAudio)
@@ -73,6 +75,25 @@ func SDPHandler(c *gin.Context) {
 				panic(newTrackErr)
 			}
 			outTrack = localTrack
+
+			trackMut.Lock()
+			for _, conn := range clients {
+				rtpSender, err := conn.AddTrack(outTrack)
+				if err != nil {
+					panic(err)
+				}
+
+				go func() {
+					rtcpBuf := make([]byte, 1500)
+					for {
+						if _, _, rtcpErr := rtpSender.Read(rtcpBuf); rtcpErr != nil {
+							return
+						}
+					}
+				}()
+			}
+			trackMut.Unlock()
+
 			rtpBuf := make([]byte, 1400)
 			for {
 				i, _, readErr := remoteTrack.Read(rtpBuf)
